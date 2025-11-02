@@ -1,0 +1,606 @@
+```
+// @file ./src/apple.c
+
+#include "apple.h"
+#include <stdlib.h>
+
+Apple *apple_create(Vec2 pos) {
+    Apple *a = malloc(sizeof(Apple));
+    a->position = pos;
+    a->in_snake = 0;
+    a->digest_time = 0;
+    a->index = 0;
+    return a;
+}
+
+void apple_update(Apple *apple, float dt) {
+    if (apple->in_snake) {
+        apple->digest_time += dt;
+    }
+}
+
+void apple_free(Apple *apple) {
+    free(apple);
+}
+
+
+```
+```
+// @file ./src/apple.h
+
+#ifndef APPLE_H
+#define APPLE_H
+
+#include "structs.h"
+
+Apple *apple_create(Vec2 pos);
+void apple_update(Apple *apple, float dt);
+void apple_free(Apple *apple);
+
+#endif // APPLE_H
+
+
+```
+```
+// @file ./src/game.c
+
+#include "game.h"
+#include <stdlib.h>
+#include "snake.h"
+#include "tree.h"
+
+void game_init(Game *game) {
+    snake_init(&game->snake, (Vec2){250, 250});
+    list_init(&game->trees);
+    list_init(&game->apples);
+    list_init(&game->seeds);
+
+    for (int i = 0; i < 20 + rand() % 31; ++i) {
+        Vec2 pos = {rand() % 500, rand() % 500};
+        Tree *t = tree_create(pos);
+        list_push_front(&game->trees, t);
+    }
+
+    game->viewport_pos = (Vec2){225, 225};
+}
+
+void game_input(Game *g, SDL_Event *e) {
+    if (e->type == SDL_EVENT_KEY_DOWN) {
+        switch (e->key.key) {
+            case SDLK_UP: g->snake.dir = DIR_UP; break;
+            case SDLK_DOWN: g->snake.dir = DIR_DOWN; break;
+            case SDLK_LEFT: g->snake.dir = DIR_LEFT; break;
+            case SDLK_RIGHT: g->snake.dir = DIR_RIGHT; break;
+        }
+    }
+}
+
+void game_update(Game *game, float dt) {
+    snake_update(&game->snake, dt);
+
+    for (ListNode *node = game->trees.first; node; node = node->next)
+        tree_update((Tree *)node->data, dt, &game->apples);
+
+    for (ListNode *node = game->apples.first; node; node = node->next)
+        apple_update((Apple *)node->data, dt);
+
+    for (ListNode *node = game->seeds.first; node; node = node->next)
+        seed_update((Seed *)node->data, dt, &game->trees);
+}
+
+void render_game(Game *g, SDL_Renderer *r) {
+    SDL_SetRenderDrawColor(r, 20, 20, 20, 255);
+    SDL_RenderClear(r);
+
+    // Draw visible grid
+    for (int i = 0; i <= VIEWPORT_SIZE; ++i) {
+        int x = i * 20;
+        SDL_SetRenderDrawColor(r, 60, 60, 60, 255);
+        SDL_RenderLine(r, x, 0, x, VIEWPORT_SIZE * 20);
+        SDL_RenderLine(r, 0, x, VIEWPORT_SIZE * 20, x);
+    }
+
+    
+    SDL_RenderPresent(r);
+}
+
+void game_free(Game *game) {
+    snake_free(&game->snake);
+    list_clear(&game->trees, (void(*)(void*))tree_free);
+    list_clear(&game->apples, (void(*)(void*))apple_free);
+    list_clear(&game->seeds, (void(*)(void*))seed_free);
+}
+
+
+```
+```
+// @file ./src/game.h
+
+#ifndef GAME_H
+#define GAME_H
+
+#include "game.h"
+#include "snake.h"
+#include "tree.h"
+#include "apple.h"
+#include "seed.h"
+#include "list.h"
+#include <stdlib.h>
+#include <SDL3/SDL.h>
+
+#define WORLD_SIZE 500
+#define VIEWPORT_SIZE 50
+
+void game_init(Game *game);
+void game_free(Game *game);
+void game_input(Game *game, SDL_Event *e);
+void game_update(Game *game, float delta);
+void game_render(Game *game, SDL_Renderer *renderer);
+
+#endif /* GAME_H */
+
+```
+```
+// @file ./src/list.c
+
+#include "list.h"
+#include <stdlib.h>
+
+void list_init(List *list) {
+    list->first = list->last = NULL;
+    list->count = 0;
+}
+
+void list_push_front(List *list, void *data) {
+    ListNode *node = malloc(sizeof(ListNode));
+    node->data = data;
+    node->next = NULL;
+    node->next = list->first;
+
+    if (list->first)
+        list->first->prev = node;
+    else
+        list->last = node;
+
+    list->first = node;
+    list->count++;
+}
+
+void list_remove(List *list, ListNode *node) {
+    if (node->prev)
+        node->prev->next = node->next;
+    else
+        list->first = node->next;
+
+    if (node->next)
+        node->next->prev = node->prev;
+    else
+        list->last = node->prev;
+
+    free(node);
+    list->count--;
+}
+
+void list_clear(List *list, void (*free_func)(void *)) {
+    ListNode *node = list->first;
+    while (node) {
+        ListNode *next = node->next;
+        if (free_func)
+            free_func(node->data);
+        free(node);
+        node = next;
+    }
+    list->first = list->last = NULL;
+    list->count = 0;
+}
+
+
+```
+```
+// @file ./src/list.h
+
+#ifndef LIST_H
+#define LIST_H
+
+#include <stddef.h>
+#include "structs.h"
+
+void list_init(List *list);
+void list_push_front(List *list, void *data);
+void list_remove(List *list, ListNode *node);
+void list_clear(List *list, void (*free_func)(void*));
+
+#endif // LIST_H
+
+
+```
+```
+// @file ./src/main.c
+
+#include <SDL3/SDL.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include "game.h"
+
+int main(int argc, char *argv[]) {
+    SDL_Init(SDL_INIT_VIDEO);
+    SDL_Window *window = SDL_CreateWindow("Snake Garden", 1000, 1000, SDL_WINDOW_RESIZABLE);
+    SDL_Renderer *renderer = SDL_CreateRenderer(window, NULL);
+
+    srand((unsigned int)time(NULL));
+    Game game;
+    game_init(&game);
+
+    Uint64 last_ticks = SDL_GetTicks64();
+    int running = 1;
+
+    while (running) {
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_EVENT_QUIT) running = 0;
+            handle_input(&game, &e);
+        }
+
+        Uint64 now = SDL_GetTicks64();
+        float delta = (now - last_ticks) / 1000.0f;
+        last_ticks = now;
+
+        update_game(&game, delta);
+        render_game(&game, renderer);
+
+        SDL_Delay(16); // ~60 FPS
+    }
+
+    game_free(&game);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return 0;
+}
+
+
+```
+```
+// @file ./src/seed.c
+
+#include "seed.h"
+#include "tree.h"
+#include <stdlib.h>
+
+Seed *seed_create(Vec2 pos) {
+    Seed *s = malloc(sizeof(Seed));
+    s->position = pos;
+    s->time_to_grow = 30 + rand() % 570; // entre 30s et 10min
+    return s;
+}
+
+void seed_update(Seed *seed, float dt, List *trees) {
+    seed->time_to_grow -= dt;
+    if (seed_ready(seed)) {
+        Tree *t = tree_create(seed->position);
+        list_push_front(trees, t);
+        seed->time_to_grow = -1;
+    }
+}
+
+int seed_ready(const Seed *seed) {
+    return seed->time_to_grow <= 0;
+}
+
+void seed_free(Seed *seed) {
+    free(seed);
+}
+
+
+```
+```
+// @file ./src/seed.h
+
+#ifndef SEED_H
+#define SEED_H
+
+#include "structs.h"
+
+Seed *seed_create(Vec2 pos);
+void seed_update(Seed *seed, float dt, List *trees);
+int seed_ready(const Seed *seed);
+void seed_free(Seed *seed);
+
+#endif // SEED_H
+
+
+```
+```
+// @file ./src/snake.c
+
+#include "snake.h"
+#include <stdlib.h>
+#include <string.h>
+
+void snake_init(Snake *snake, Vec2 start_pos) {
+    snake->length = 3;
+    snake->capacity = 16;
+    snake->body = malloc(sizeof(Vec2) * snake->capacity);
+    for (int i = 0; i < 3; ++i) {
+        snake->body[i] = (Vec2){start_pos.x - i, start_pos.y};
+    }
+    snake->pending_growth = 0;
+    snake->dir = DIR_RIGHT;
+    snake->move_timer = 0;
+    snake->move_interval = 0.1f;
+}
+
+void snake_free(Snake *snake) {
+    free(snake->body);
+    snake->body = NULL;
+    snake->length = snake->capacity = 0;
+}
+
+void snake_set_direction(Snake *snake, Direction dir) {
+    // évite de faire demi-tour
+    if ((snake->dir == DIR_UP && dir != DIR_DOWN) ||
+        (snake->dir == DIR_DOWN && dir != DIR_UP) ||
+        (snake->dir == DIR_LEFT && dir != DIR_RIGHT) ||
+        (snake->dir == DIR_RIGHT && dir != DIR_LEFT)) {
+        snake->dir = dir;
+    }
+}
+
+Vec2 snake_head(const Snake *snake) {
+    return snake->body[0];
+}
+
+void snake_grow(Snake *snake, int count) {
+    snake->pending_growth += count;
+}
+
+int snake_collides_with(Vec2 pos, Snake *snake) {
+    for (size_t i = 0; i < snake->length; ++i) {
+        if (snake->body[i].x == pos.x && snake->body[i].y == pos.y)
+            return 1;
+    }
+    return 0;
+}
+
+int snake_move(Snake *snake) {
+    Vec2 head = snake_head(snake);
+    switch (snake->dir) {
+        case DIR_UP: head.y--; break;
+        case DIR_DOWN: head.y++; break;
+        case DIR_LEFT: head.x--; break;
+        case DIR_RIGHT: head.x++; break;
+    }
+
+    if (snake->length + 1 > snake->capacity) {
+        snake->capacity *= 2;
+        snake->body = realloc(snake->body, sizeof(Vec2) * snake->capacity);
+    }
+
+    memmove(&snake->body[1], &snake->body[0], sizeof(Vec2) * snake->length);
+    snake->body[0] = head;
+    if (snake->pending_growth > 0) {
+        snake->pending_growth--;
+        snake->length++;
+    } else {
+        // rien à faire, la taille reste constante
+    }
+
+    return 1;
+}
+
+void snake_update(Snake *snake, float dt) {
+    snake->move_timer += dt;
+    if (snake->move_timer >= snake->move_interval) {
+        snake_move(snake);
+        snake->move_timer = 0;
+    }
+}
+
+
+```
+```
+// @file ./src/snake.h
+
+#ifndef SNAKE_H
+#define SNAKE_H
+
+#include "structs.h"
+
+void snake_init(Snake *snake, Vec2 start_pos);
+void snake_free(Snake *snake);
+void snake_set_direction(Snake *snake, Direction dir);
+void snake_update(Snake *snake, float dt);
+int snake_move(Snake *snake);
+int snake_collides_with(Vec2 pos, Snake *snake);
+Vec2 snake_head(const Snake *snake);
+void snake_grow(Snake *snake, int count);
+
+#endif // SNAKE_H
+
+
+```
+```
+// @file ./src/structs.h
+
+#ifndef STRUCTS_H
+#define STRUCTS_H
+
+#include <SDL3/SDL_stdinc.h>
+
+typedef struct ListNode ListNode;
+struct ListNode {
+    void *data;
+    ListNode *prev, next;
+};
+
+typedef struct List {
+    ListNode *first;
+    ListNode *last;
+    Uint64 count;
+} List;
+
+typedef struct {
+    Uint32 x, y;
+} Vec2;
+
+typedef enum {
+    TILE_EMPTY,
+    TILE_TREE,
+    TILE_APPLE,
+    TILE_SEED,
+} TileType;
+
+typedef struct {
+    Vec2 position;
+    Uint8 age; // de 0 (jeune) à 100 (mature)
+    float growth_timer; // compteur de croissance
+    float apple_timer;  // timer de génération de pomme
+} Tree;
+
+typedef struct {
+    Vec2 position;
+    Uint64 time_to_grow; // temps restant pour donner un arbre
+} Seed;
+
+typedef enum {
+    DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT
+} Direction;
+
+typedef struct {
+    List *body; // tableau dynamique de Vec2
+    Uint64 pending_growth; // nb de cases à ajouter
+    Uint64 pending_timer;
+
+    Direction dir;
+    float move_timer;
+    float move_interval;
+} Snake;
+
+typedef struct {
+    Vec2 position;
+    bool in_snake; // 1 si la pomme est dans le serpent
+    float digest_time; // Temps écoulé depuis ingestion
+    Uint64 index;   // Position dans le serpent
+} Apple;
+
+typedef struct Game {
+    Snake snake;
+
+    List trees;
+    List apples;
+    List seeds;
+
+    Vec2 viewport_pos;
+} Game;
+
+#endif /* STRUCTS_H */
+
+```
+```
+// @file ./src/tree.c
+
+#include "tree.h"
+#include "list.h"
+
+Tree *tree_create(Vec2 pos) {
+    Tree *tree = malloc(sizeof(Tree));
+    tree->position = pos;
+    tree->age = 0;
+    tree->growth_timer = 0.0f;
+    tree->apple_timer = 5.0f;
+    return tree;
+}
+
+void tree_update(Tree *tree, float dt, List *apples) {
+    tree->growth_timer += dt;
+    tree->apple_timer -= dt;
+
+    if (tree->growth_timer >= 10.0f && tree->age < 100) {
+        tree->growth_timer = 0;
+        tree->age += 1;
+    }
+
+    if (tree->apple_timer <= 0.0f) {
+        if (tree_is_mature(tree)) {
+            Apple *apple = malloc(sizeof(Apple));
+            apple->in_snake = 0;
+            apple->digest_time = 0;
+            apple->index = 0;
+
+            int radius = 3;
+            apple->position.x = tree->position.x + (rand() % (2 * radius + 1)) - radius;
+            apple->position.y = tree->position.y + (rand() % (2 * radius + 1)) - radius;
+            list_push_front(apples, apple);
+        }
+        tree->apple_timer = 5.0f + (100 - tree->age) * 0.1f;
+    }
+}
+
+int tree_is_mature(const Tree *tree) {
+    return tree->age >= 100;
+}
+
+int tree_occupies(const Tree *tree, Vec2 pos) {
+    int radius = tree_is_mature(tree) ? 3 : 1;
+    return abs(tree->position.x - pos.x) <= radius &&
+           abs(tree->position.y - pos.y) <= radius;
+}
+
+void tree_free(Tree *tree) {
+    free(tree);
+}
+
+
+```
+```
+// @file ./src/tree.h
+
+#ifndef TREE_H
+#define TREE_H
+
+#include "structs.h"
+
+Tree *tree_create(Vec2 pos);
+void tree_update(Tree *tree, float dt, List *apples);
+int tree_is_mature(const Tree *tree);
+int tree_occupies(const Tree *tree, Vec2 pos);
+void tree_free(Tree *tree);
+
+#endif // TREE_H
+
+
+```
+```
+// @file ./src/utils.c
+
+// @file ./src/sdl_util.c
+#include <SDL3/SDL.h>
+#include <math.h>
+
+void SDL_RenderCircle(SDL_Renderer *r, int x0, int y0, int radius) {
+    for (int dy = -radius; dy <= radius; ++dy) {
+        for (int dx = -radius; dx <= radius; ++dx) {
+            if (dx * dx + dy * dy <= radius * radius) {
+                SDL_RenderPoint(r, x0 + dx, y0 + dy);
+            }
+        }
+    }
+}
+
+
+```
+```
+// @file ./src/utils.h
+
+#ifndef SDL_UTIL_H
+#define SDL_UTIL_H
+
+#include <SDL3/SDL.h>
+
+void SDL_RenderCircle(SDL_Renderer *r, int x0, int y0, int radius);
+
+#endif
+
+
+```
