@@ -1,4 +1,4 @@
-PROJECT_NAME := Application
+PROJECT_NAME := Snake
 CC		:= gcc
 SRCDIR	:= src
 BUILDDIR  := build
